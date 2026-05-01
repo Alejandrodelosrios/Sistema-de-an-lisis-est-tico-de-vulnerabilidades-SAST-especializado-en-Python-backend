@@ -1,11 +1,24 @@
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from app.database import engine, Base
+from app.routers import auth
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    print("✅ Tablas creadas")
+    yield
+    print("🛑 Cerrando aplicación")
 
 app = FastAPI(
-    tittle="backend con fastapi",
-    description = "backend para el proyecto de taller",
-    version = "0.0.1"
+    title="SAST API",
+    description="Sistema de análisis estático de vulnerabilidades",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
+app.include_router(auth.router)
+
 @app.get("/")
-def home():
-    return "hola mundo"
+def root():
+    return {"status": "ok", "message": "API funcionando"}
