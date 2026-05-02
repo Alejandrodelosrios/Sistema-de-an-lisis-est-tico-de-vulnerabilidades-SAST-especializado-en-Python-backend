@@ -3,7 +3,7 @@ from sqlalchemy import func
 from app.database import Base
 
 class User(Base):
-    __tablename__ = "usario"
+    __tablename__ = "usuario"
 
     id=Column(Integer, primary_key=True, index=True) 
     nombre_completo=Column(String(150), nullable=False)
