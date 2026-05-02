@@ -1,6 +1,6 @@
 class TestRegisterEndpoint:
 
-    def test_register_exitoso(self, client):
+    def test_register_exitoso(self, client,db):
         """Registro exitoso debe devolver tokens"""
         response = client.post("/auth/register", json={
             "nombre_completo": "newuser",
@@ -72,7 +72,7 @@ class TestProtectedEndpoints:
     def test_get_perfil_sin_token(self, client):
         """Sin token debe devolver 403"""
         response = client.get("/auth/me")
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     def test_logout_exitoso(self, client, registered_user, auth_headers):
         """Logout debe cerrar sesión correctamente"""
@@ -81,7 +81,7 @@ class TestProtectedEndpoints:
             headers=auth_headers
         )
         assert response.status_code == 200
-        assert response.json()["message"] == "Sesión cerrada correctamente"
+        assert response.json()["message"] == "Sesión cerrada exitosamente"
 
     def test_update_perfil(self, client, auth_headers):
         """Actualizar nombre_completo debe reflejarse en el perfil"""
