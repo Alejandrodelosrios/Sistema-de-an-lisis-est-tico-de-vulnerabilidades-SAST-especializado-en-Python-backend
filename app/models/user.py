@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String,Boolean, DateTime
 from sqlalchemy import func
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 class User(Base):
@@ -12,3 +13,6 @@ class User(Base):
     activo=Column(Boolean, default=True)
     fecha_registro=Column(DateTime(timezone=True), server_default=func.now())
     refresh_token=Column(String,nullable=True)
+    
+    #relaciones
+    proyectos=relationship("Project",back_populates="usuario")
