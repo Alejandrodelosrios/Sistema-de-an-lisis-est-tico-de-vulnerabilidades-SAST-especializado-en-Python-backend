@@ -13,6 +13,6 @@ class User(Base):
     activo=Column(Boolean, default=True)
     fecha_registro=Column(DateTime(timezone=True), server_default=func.now())
     refresh_token=Column(String,nullable=True)
-
+    
     #relaciones
     proyectos=relationship("Project",back_populates="usuario")
