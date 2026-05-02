@@ -52,7 +52,7 @@ def update_password(
     return auth_service.update_password(db, current_user, password_data)
 
 @router.delete("/me")
-def delete_cuenta(
+def eliminar_cuenta(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
