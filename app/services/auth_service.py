@@ -152,12 +152,20 @@ def update_password(db: Session, current_user: User, password_data: PasswordUpda
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La nueva contraseña debe ser diferente a la actual"
         )
-    current_user.hashed_password = hash_password(password_data.new_password)
+    current_user.password = hash_password(password_data.new_password)
     current_user.refresh_token = None
-    db.commit()
 
-
-
+    try:
+        db.commit()
+        db.refresh(current_user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo actualizar la base de datos"
+        )
+            
+    return {"status": "success", "message": "Contraseña actualizada exitosamente"}
 
 def eliminar_cuenta(db:Session, current_user: User)-> dict:
     """esta funcion elimina la cuenta del usuario actual"""
