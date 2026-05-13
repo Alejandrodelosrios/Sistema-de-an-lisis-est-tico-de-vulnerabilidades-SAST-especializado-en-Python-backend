@@ -19,9 +19,16 @@ app = FastAPI(
     version="1.0.1",
     lifespan=lifespan
 )
+
+origins = [
+    "https://sistema-de-an-lisis-est-tico-de-vul.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
