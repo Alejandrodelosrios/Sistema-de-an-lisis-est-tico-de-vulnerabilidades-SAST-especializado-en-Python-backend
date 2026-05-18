@@ -1,59 +1,20 @@
 from sqlalchemy.orm import Session
-from fastapi import HTTPException, UploadFile, status
-from typing import Optional
+from fastapi import HTTPException, status
 from app.models.project import Project, OrigenEnum
 from app.models.user import User
 from app.schemas.project import ProjectCreate,ProjectUpdate
-from app.services import file_service
 
-async def crear_proyecto(
-    db: Session,
-    proyecto: ProjectCreate,
-    current_user: User,
-    files: Optional[list[UploadFile]] = None   # ← parámetro nuevo
-) -> Project:
-
-    # Validación según origen — antes no existía esto
-    if proyecto.origen == OrigenEnum.github:
-        if not proyecto.url_github:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Debés proporcionar la URL del repositorio de GitHub"
-            )
-    elif proyecto.origen == OrigenEnum.carga_directa:
-        if not files or len(files) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Debés subir al menos un archivo .py"
-            )
-
-    # Crear el proyecto en BD — igual que antes
-    nuevo_proyecto = Project(
-        nombre=proyecto.nombre,
-        origen=proyecto.origen,
-        url_github=proyecto.url_github if proyecto.origen == OrigenEnum.github else None,
-        usuario_id=current_user.id
+def crear_proyecto(db: Session, proyecto: ProjectCreate,current_user: User)-> Project:
+    """esta funcion se encarga de crear un nuevo proyecto en la base de datos"""
+    nuevo_proyecto =Project(
+        nombre= proyecto.nombre,
+        origen= proyecto.origen,
+        url_github=None if proyecto.origen != OrigenEnum.github else proyecto.url_github, 
+        usuario_id=current_user.id         
     )
+
     db.add(nuevo_proyecto)
     db.commit()
-    db.refresh(nuevo_proyecto)
-
-    # Disparar carga de archivos internamente según origen
-    if proyecto.origen == OrigenEnum.github:
-        await file_service.cargar_desde_github(
-            db=db,
-            proyecto_id=nuevo_proyecto.id,
-            current_user=current_user,
-            url_github=proyecto.url_github
-        )
-    else:
-        await file_service.cargar_archivos(
-            db=db,
-            proyecto_id=nuevo_proyecto.id,
-            current_user=current_user,
-            files=files
-        )
-
     db.refresh(nuevo_proyecto)
     return nuevo_proyecto
 

@@ -20,4 +20,3 @@ class Project(Base):
     
     #relaciones
     usuario=relationship("User",back_populates="proyectos")
-    archivos=relationship("File", back_populates="proyecto")
