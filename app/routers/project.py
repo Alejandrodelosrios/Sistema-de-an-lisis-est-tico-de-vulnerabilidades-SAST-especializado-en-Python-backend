@@ -34,11 +34,20 @@ def get_proyecto(proyecto_id:int, db:Session =Depends(get_db),
                  ):
     return project_service.get_proyecto(db,proyecto_id,current_user)
 
-@router.put("/{proyecto_id}", response_model=ProjectResponse)
-def update_proyecto(proyecto_id: int, proyecto_dato: ProjectUpdate,
-                    current_user: User = Depends(get_current_active_user),
-                    db: Session = Depends(get_db)):
-    return project_service.update_proyecto(db, proyecto_id, proyecto_dato, current_user)
+@router.put("/{proyecto_id}/", response_model=ProjectResponse)
+async def update_proyecto(
+    proyecto_id: int,
+    nombre: str = Form(None),
+    url_github: str = Form(None),
+    files: List[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    from app.schemas.project import ProjectUpdate
+    proyecto_dato = ProjectUpdate(nombre=nombre, url_github=url_github)
+    return await project_service.update_proyecto(
+        db, proyecto_id, proyecto_dato, current_user, files if files else None
+    )
 
 @router.delete("/{proyecto_id}")
 def eliminar_proyecto(proyecto_id: int, db: Session = Depends(get_db),
