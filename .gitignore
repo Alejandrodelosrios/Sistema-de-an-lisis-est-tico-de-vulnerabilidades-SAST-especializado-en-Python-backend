@@ -9,3 +9,4 @@ test.db
 .pytest_cache/
 .DS_Store
 Thumbs.db
+storage/projects/
