@@ -17,3 +17,4 @@ class File(Base):
     
     # relaciones
     proyecto = relationship("Project", back_populates="archivos")
+    vulnerabilidades = relationship("Vulnerability", back_populates="archivo")

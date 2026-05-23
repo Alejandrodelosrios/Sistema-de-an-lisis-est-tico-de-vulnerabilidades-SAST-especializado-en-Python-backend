@@ -163,31 +163,18 @@ async def cargar_desde_github(
         )
 
     creados = []
-    async with httpx.AsyncClient() as client:
-        for item in archivos_py:
-            # Descargar contenido del archivo (API de contenidos de GitHub)
-            contenido_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['path']}"
-            r = await client.get(contenido_url, headers={"Accept": "application/vnd.github.raw+json"})
+    for item in archivos_py:
+        nombre = item["path"].replace("/", "_")
 
-            if r.status_code != 200:
-                continue  # si falla uno, sigue con el siguiente
-
-            # El nombre visible es solo el filename, no la ruta completa
-            nombre = item["path"].replace("/", "_")  # main_utils_helper.py
-            ruta = _generar_ruta(current_user.id, proyecto_id, nombre)
-
-            with open(ruta, "wb") as f:
-                f.write(r.content)
-
-            nuevo = File(
-                nombre=nombre,
-                ruta_almacenamiento=str(ruta),
-                tamaño_bytes=len(r.content),
-                proyecto_id=proyecto_id,
-                estado=True
-            )
-            db.add(nuevo)
-            creados.append(nuevo)
+        nuevo = File(
+            nombre=nombre,
+            ruta_almacenamiento=item['path'],  # path dentro del repo, no ruta local
+            tamaño_bytes=item.get("size", None),  # el árbol ya trae el size
+            proyecto_id=proyecto_id,
+            estado=True
+        )
+        db.add(nuevo)
+        creados.append(nuevo)
 
     db.commit()
     for f in creados:
