@@ -4,7 +4,8 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.analysis import (
     AnalysisDetailResponse,
-    AnalysisListResponse
+    AnalysisListResponse,
+    AnalysisHistoryResponse
 )
 from app.services import analysis_service
 from app.core.dependencies import get_current_active_user
@@ -58,3 +59,18 @@ def get_analisis(
     - Devuelve el análisis con todas sus vulnerabilidades
     """
     return analysis_service.get_analisis(db,proyecto_id, analisis_id, current_user)
+
+
+@router.get("/{proyecto_id}/history/", response_model=AnalysisHistoryResponse)
+def get_project_history(
+    proyecto_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtiene el historial y evolución de seguridad de un proyecto (CU6).
+    
+    - **proyecto_id**: ID del proyecto
+    - Devuelve lista de análisis ordenados por fecha descendente con conteo de vulnerabilidades por severidad
+    """
+    return analysis_service.get_project_history(db, proyecto_id, current_user)

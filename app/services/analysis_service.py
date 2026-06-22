@@ -4,10 +4,12 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from app.models.analysis import Analysis
 from app.models.vulnerability import Vulnerability, SeveridadEnum
+from app.models.recommendation import Recommendation
 from app.models.project import Project, OrigenEnum
 from app.models.user import User
 from app.models.file import File
 from app.services.motor_ast import analizar_contenido
+from app.services.recommendation_service import obtener_recomendacion
 
 
 def _verificar_proyecto_usuario(db: Session, proyecto_id: int, current_user: User) -> Project:
@@ -235,9 +237,17 @@ async def ejecutar_analisis(db: Session, proyecto_id: int, current_user: User) -
                     archivo_id=archivo_bd.id,
                     nombre_archivo=item["nombre"]
                 )
+
+                # Crear recomendación automáticamente
+                recom_data = obtener_recomendacion(v.tipo_owasp)
+                nueva_recom = Recommendation(
+                    titulo=recom_data["titulo"],
+                    explicacion_riesgo=recom_data["explicacion_riesgo"],
+                    codigo_corregido_ejemplo=recom_data["codigo_corregido_ejemplo"]
+                )
+                nueva_vuln.recomendaciones.append(nueva_recom)  # 👈 SQLAlchemy resuelve el FK al hacer flush/commit
                 db.add(nueva_vuln)
                 vulnerabilidades_guardadas.append(nueva_vuln)
-
     else:
         # Carga directa — leer desde BD y disco
         resultado_archivos = file_service.get_archivos(db, proyecto_id, current_user)
@@ -269,6 +279,15 @@ async def ejecutar_analisis(db: Session, proyecto_id: int, current_user: User) -
                     archivo_id=archivo.id,
                     nombre_archivo=archivo.nombre
                 )
+
+                # Crear recomendación automáticamente
+                recom_data = obtener_recomendacion(v.tipo_owasp)
+                nueva_recom = Recommendation(
+                    titulo=recom_data["titulo"],
+                    explicacion_riesgo=recom_data["explicacion_riesgo"],
+                    codigo_corregido_ejemplo=recom_data["codigo_corregido_ejemplo"]
+                )
+                nueva_vuln.recomendaciones.append(nueva_recom)  # 👈 SQLAlchemy resuelve el FK al hacer flush/commit
                 db.add(nueva_vuln)
                 vulnerabilidades_guardadas.append(nueva_vuln)
 
@@ -313,7 +332,7 @@ def listar_analisis(db: Session, proyecto_id: int, current_user: User) -> dict:
     # Paso 2: Obtener análisis ordenados por fecha descendente
     analisis_list = db.query(Analysis).filter(
         Analysis.proyecto_id == proyecto_id
-    ).order_by(Analysis.fecha_ejecucion.desc()).all()
+    ).order_by(Analysis.fecha_ejecucion.desc(),Analysis.id.desc()).all()
     
     # Paso 3: Devolver resultado
     return {
@@ -364,3 +383,63 @@ def get_analisis(db: Session, proyecto_id: int,analisis_id: int, current_user: U
     
     # Paso 3: Devolver el análisis
     return analisis
+
+
+def get_project_history(db: Session, proyecto_id: int, current_user: User) -> dict:
+    """
+    Obtiene el historial de análisis de un proyecto con conteos de vulnerabilidades por severidad.
+    
+    Args:
+        db: Sesión de base de datos
+        proyecto_id: ID del proyecto
+        current_user: Usuario autenticado propietario del proyecto
+        
+    Returns:
+        Diccionario con keys "total" y "historial" (lista de AnalysisHistoryItem)
+        
+    Raises:
+        HTTPException 404 si el proyecto no existe
+    """
+    # Paso 1: Verificar que el proyecto existe y pertenece al usuario
+    _verificar_proyecto_usuario(db, proyecto_id, current_user)
+    
+    # Paso 2: Obtener todos los análisis del proyecto ordenados por fecha descendente
+    analisis_list = db.query(Analysis).filter(
+        Analysis.proyecto_id == proyecto_id
+    ).order_by(Analysis.fecha_ejecucion.desc(),Analysis.id.desc()).all()
+    
+    # Paso 3: Para cada análisis, calcular conteo de vulnerabilidades por severidad
+    historial = []
+    for analisis in analisis_list:
+        # Contar vulnerabilidades por severidad usando agregación en BD
+        conteo = {
+            "critica": db.query(Vulnerability).filter(
+                Vulnerability.analisis_id == analisis.id,
+                Vulnerability.severidad == SeveridadEnum.critica
+            ).count(),
+            "alta": db.query(Vulnerability).filter(
+                Vulnerability.analisis_id == analisis.id,
+                Vulnerability.severidad == SeveridadEnum.alta
+            ).count(),
+            "media": db.query(Vulnerability).filter(
+                Vulnerability.analisis_id == analisis.id,
+                Vulnerability.severidad == SeveridadEnum.media
+            ).count(),
+            "baja": db.query(Vulnerability).filter(
+                Vulnerability.analisis_id == analisis.id,
+                Vulnerability.severidad == SeveridadEnum.baja
+            ).count(),
+        }
+        conteo["total"] = sum(conteo.values())
+        
+        historial.append({
+            "id": analisis.id,
+            "fecha_ejecucion": analisis.fecha_ejecucion,
+            "score_seguridad": analisis.score_seguridad,
+            "vulnerabilidades_por_severidad": conteo
+        })
+    
+    return {
+        "total": len(historial),
+        "historial": historial
+    }
