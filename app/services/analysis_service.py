@@ -1,4 +1,6 @@
 import httpx
+from app.models.activity_log import AccionEnum
+from app.services.activity_service import registrar_actividad
 import app.services.file_service as file_service
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
@@ -10,7 +12,7 @@ from app.models.user import User
 from app.models.file import File
 from app.services.motor_ast import analizar_contenido
 from app.services.recommendation_service import obtener_recomendacion
-
+from app.core.github_utils import github_headers, verificar_rate_limit
 
 def _verificar_proyecto_usuario(db: Session, proyecto_id: int, current_user: User) -> Project:
     """
@@ -47,40 +49,30 @@ async def _leer_contenido(archivo, proyecto: Project):
         partes_url = proyecto.url_github.rstrip("/").split("/")
         repo = partes_url[-1]
         owner = partes_url[-2]
-
-        try:
-            async with httpx.AsyncClient() as client:
-                # Obtener rama por defecto
-                r_repo = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}",
-                    headers={"Accept": "application/vnd.github+json"}
-                )
-                if r_repo.status_code != 200:
-                    return None
-
-                rama = r_repo.json().get("default_branch", "main")
-
-                # Leer contenido plano desde raw.githubusercontent.com
-                url_raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{rama}/{archivo.ruta_almacenamiento}"
-                r = await client.get(url_raw)
-
-                if r.status_code != 200:
-                    return None
-
-                return r.text
-
-        except Exception:
-            return None
-
+ 
+        async with httpx.AsyncClient() as client:
+            r_repo = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                headers=github_headers()
+            )
+            verificar_rate_limit(r_repo)  # ← lanza 429 explícito si fue rate limit
+            if r_repo.status_code != 200:
+                return None
+ 
+            rama = r_repo.json().get("default_branch", "main")
+ 
+            # raw.githubusercontent.com NO tiene rate limit estricto, no necesita headers especiales
+            url_raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{rama}/{archivo.ruta_almacenamiento}"
+            r = await client.get(url_raw)
+ 
+            if r.status_code != 200:
+                return None
+ 
+            return r.text
     else:
-        if not archivo.ruta_almacenamiento:
-            return None
-        try:
-            with open(archivo.ruta_almacenamiento, "r", encoding="utf-8") as f:
-                return f.read()
-        except (FileNotFoundError, OSError):
-            return None
-
+        # Carga directa: el código vive en la columna 'contenido' de la BD,
+        # no en disco (Render no tiene almacenamiento persistente entre reinicios).
+        return archivo.contenido
 
 def _calcular_score(vulnerabilidades_guardadas: list) -> float:
     """
@@ -113,41 +105,42 @@ async def _obtener_archivos_github(url_github: str) -> list[dict]:
     partes = url_github.rstrip("/").split("/")
     owner = partes[-2]
     repo = partes[-1]
-
-    try:
-        async with httpx.AsyncClient() as client:
-            # Obtener rama por defecto
-            r_repo = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}",
-                headers={"Accept": "application/vnd.github+json"}
+ 
+    async with httpx.AsyncClient() as client:
+        r_repo = await client.get(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers=github_headers()
+        )
+        verificar_rate_limit(r_repo)
+        if r_repo.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="No se pudo obtener información del repositorio de GitHub"
             )
-            if r_repo.status_code != 200:
-                return []
-
-            rama = r_repo.json().get("default_branch", "main")
-
-            # Obtener árbol completo del repo
-            r_tree = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/git/trees/{rama}?recursive=1",
-                headers={"Accept": "application/vnd.github+json"}
+ 
+        rama = r_repo.json().get("default_branch", "main")
+ 
+        r_tree = await client.get(
+            f"https://api.github.com/repos/{owner}/{repo}/git/trees/{rama}?recursive=1",
+            headers=github_headers()
+        )
+        verificar_rate_limit(r_tree)
+        if r_tree.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="No se pudo obtener el árbol de archivos del repositorio"
             )
-            if r_tree.status_code != 200:
-                return []
-
-            tree = r_tree.json().get("tree", [])
-
-            return [
-                {
-                    "path": item["path"],
-                    "nombre": item["path"].replace("/", "_")
-                }
-                for item in tree
-                if item["type"] == "blob" and item["path"].endswith(".py")
-            ]
-
-    except Exception:
-        return []
-
+ 
+        tree = r_tree.json().get("tree", [])
+ 
+        return [
+            {
+                "path": item["path"],
+                "nombre": item["path"].replace("/", "_")
+            }
+            for item in tree
+            if item["type"] == "blob" and item["path"].endswith(".py")
+        ]
 
 async def _leer_contenido_github(url_github: str, path_archivo: str) -> str | None:
     """
@@ -156,31 +149,27 @@ async def _leer_contenido_github(url_github: str, path_archivo: str) -> str | No
     partes = url_github.rstrip("/").split("/")
     owner = partes[-2]
     repo = partes[-1]
+ 
+    async with httpx.AsyncClient() as client:
+        r_repo = await client.get(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers=github_headers()
+        )
+        verificar_rate_limit(r_repo)
+        if r_repo.status_code != 200:
+            return None
+ 
+        rama = r_repo.json().get("default_branch", "main")
+ 
+        url_raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{rama}/{path_archivo}"
+        r = await client.get(url_raw)
+ 
+        if r.status_code != 200:
+            return None
+ 
+        return r.text
 
-    try:
-        async with httpx.AsyncClient() as client:
-            r_repo = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}",
-                headers={"Accept": "application/vnd.github+json"}
-            )
-            if r_repo.status_code != 200:
-                return None
-
-            rama = r_repo.json().get("default_branch", "main")
-
-            url_raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{rama}/{path_archivo}"
-            r = await client.get(url_raw)
-
-            if r.status_code != 200:
-                return None
-
-            return r.text
-
-    except Exception:
-        return None
-
-
-async def ejecutar_analisis(db: Session, proyecto_id: int, current_user: User) -> Analysis:
+async def ejecutar_analisis(db: Session, proyecto_id: int, current_user: User, ip:str) -> Analysis:
     # Paso 1: Verificar proyecto
     proyecto = _verificar_proyecto_usuario(db, proyecto_id, current_user)
 
@@ -306,7 +295,11 @@ async def ejecutar_analisis(db: Session, proyecto_id: int, current_user: User) -
     nuevo_analisis.score_seguridad = score
     db.commit()
     db.refresh(nuevo_analisis)
-
+    registrar_actividad(db,current_user.id,AccionEnum.analisis_ejecutado,
+                        proyecto_id=proyecto_id,
+                        detalle=f"Score: {nuevo_analisis.score_seguridad} | Vulnerabilidades: {len(vulnerabilidades_guardadas)}",
+                        ip_origen=ip
+                        )
     return nuevo_analisis
 
 

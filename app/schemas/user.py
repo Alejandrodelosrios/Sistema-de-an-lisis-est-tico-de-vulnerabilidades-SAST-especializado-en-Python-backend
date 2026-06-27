@@ -1,6 +1,21 @@
 from pydantic import BaseModel, EmailStr,field_validator,ConfigDict
 from datetime import datetime
 import re
+from app.models.user import RolEnum
+
+def validar_password(password: str)->str:
+    """esta funcion valida que la contraseña cumpla con los requisitos de seguridad"""
+    if len(password) < 8:
+            raise ValueError("La contraseña debe tener al menos 8 caracteres")
+    if not re.search(r"[A-Z]", password):
+            raise ValueError("La contraseña debe tener al menos una mayúscula")
+    if not re.search(r"[a-z]", password):
+            raise ValueError("La contraseña debe tener al menos una minúscula")
+    if not re.search(r"\d", password):
+            raise ValueError("La contraseña debe tener al menos un número")
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            raise ValueError("La contraseña debe tener al menos un símbolo")
+    return password
 
 class UserBase(BaseModel):
     nombre_completo: str
@@ -12,18 +27,7 @@ class UserCreate(UserBase):
     @field_validator("password")
     @classmethod
     def validate_password(cls, value):
-        """esta funcion valida que la contraseña cumpla con los requisitos de seguridad"""
-        if len(value) < 8:
-            raise ValueError("La contraseña debe tener al menos 8 caracteres")
-        if not re.search(r"[A-Z]", value):
-            raise ValueError("La contraseña debe tener al menos una mayúscula")
-        if not re.search(r"[a-z]", value):
-            raise ValueError("La contraseña debe tener al menos una minúscula")
-        if not re.search(r"\d", value):
-            raise ValueError("La contraseña debe tener al menos un número")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", value):
-            raise ValueError("La contraseña debe tener al menos un símbolo")
-        return value
+        return validar_password(value)
 
 class UserLogin(BaseModel):
     correo: EmailStr
@@ -41,17 +45,8 @@ class PasswordUpdate(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_new_password(cls, value):
-        if len(value) < 8:
-            raise ValueError("La contraseña debe tener al menos 8 caracteres")
-        if not re.search(r"[A-Z]", value):
-            raise ValueError("Debe tener al menos una mayúscula")
-        if not re.search(r"[a-z]", value):
-            raise ValueError("Debe tener al menos una minúscula")
-        if not re.search(r"\d", value):
-            raise ValueError("Debe tener al menos un número")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", value):
-            raise ValueError("Debe tener al menos un símbolo")
-        return value
+        return validar_password(value)
+    
 
     @field_validator("confirm_password")
     @classmethod
@@ -63,13 +58,13 @@ class PasswordUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     activo: bool
+    rol: RolEnum
     fecha_registro:datetime
     model_config = ConfigDict(from_attributes=True)
 
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-class TokenData(BaseModel):
-    user_id: int | None = None
+class UserAdminResponse(UserResponse):
+     cantidad_proyectos:int
+     cantidad_analisis:int
+     score_promedio:float | None = None
+     ultimo_analisis:datetime | None = None
+         

@@ -1,16 +1,12 @@
-import os
-import shutil
 import httpx
-from pathlib import Path
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile, status
-
+from app.models.activity_log import AccionEnum
 from app.models.file import File
 from app.models.project import Project
 from app.models.user import User
-
-UPLOAD_DIR = Path("storage/projects")
-
+from app.services.activity_service import registrar_actividad
+from app.core.github_utils import github_headers, verificar_rate_limit
 
 # ── Helpers internos ─────────────────────────────────────────────────────────
 
@@ -28,7 +24,6 @@ def _verificar_proyecto(db: Session, proyecto_id: int, current_user: User) -> Pr
         )
     return proyecto
 
-
 def _verificar_acceso_archivo(db: Session, archivo: File, current_user: User):
     """Verifica que el archivo pertenece a un proyecto del usuario."""
     proyecto = db.query(Project).filter(
@@ -41,7 +36,6 @@ def _verificar_acceso_archivo(db: Session, archivo: File, current_user: User):
             detail="No tenés acceso a este archivo"
         )
 
-
 def _validar_extension(nombre: str):
     """Lanza excepción si el archivo no es .py"""
     if not nombre.endswith(".py"):
@@ -49,52 +43,54 @@ def _validar_extension(nombre: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Solo se permiten archivos .py — '{nombre}' no es válido"
         )
-
-
-def _generar_ruta(usuario_id: int, proyecto_id: int, nombre: str) -> Path:
-    """Crea la carpeta y devuelve la ruta completa del archivo."""
-    carpeta = UPLOAD_DIR / f"usuario_{usuario_id}" / f"proyecto_{proyecto_id}"
-    carpeta.mkdir(parents=True, exist_ok=True)
-    return carpeta / nombre
-
-
+    
 # ── Cargar archivos .py directos (múltiples) ─────────────────────────────────
 
 async def cargar_archivos(
     db: Session,
     proyecto_id: int,
     current_user: User,
-    files: list[UploadFile]
+    files: list[UploadFile],
+    ip: str
 ) -> dict:
     _verificar_proyecto(db, proyecto_id, current_user)
-
+ 
     creados = []
     for file in files:
-        # 1. Validar que sea .py
         _validar_extension(file.filename)
-
-        # 2. Guardar en disco
-        ruta = _generar_ruta(current_user.id, proyecto_id, file.filename)
-        with open(ruta, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # 3. Registrar en BD
+ 
+        bytes_contenido = await file.read()
+        try:
+            texto_contenido = bytes_contenido.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"El archivo '{file.filename}' no es texto UTF-8 válido"
+            )
+ 
         nuevo = File(
             nombre=file.filename,
-            ruta_almacenamiento=str(ruta),
-            tamaño_bytes=os.path.getsize(ruta),
+            ruta_almacenamiento=None,
+            contenido=texto_contenido,
+            tamaño_bytes=len(bytes_contenido),
             proyecto_id=proyecto_id,
             estado=True
         )
         db.add(nuevo)
         creados.append(nuevo)
-
+ 
     db.commit()
     for f in creados:
         db.refresh(f)
-
+ 
+    registrar_actividad(
+        db, current_user.id, AccionEnum.archivo_subido,
+        proyecto_id=proyecto_id,
+        detalle=f"{len(creados)} archivos cargados desde carga directa",
+        ip_origen=ip
+    )
+ 
     return {"total": len(creados), "archivos": creados}
-
 
 # ── Cargar archivos desde GitHub (sin clonar) ────────────────────────────────
 
@@ -102,12 +98,11 @@ async def cargar_desde_github(
     db: Session,
     proyecto_id: int,
     current_user: User,
-    url_github: str  # ej: https://github.com/usuario/repositorio
+    url_github: str,
+    ip: str
 ) -> dict:
     _verificar_proyecto(db, proyecto_id, current_user)
-
-    # Extraer usuario y repo de la URL
-    # https://github.com/owner/repo  →  owner, repo
+ 
     partes = url_github.rstrip("/").split("/")
     if len(partes) < 5:
         raise HTTPException(
@@ -115,12 +110,12 @@ async def cargar_desde_github(
             detail="URL de GitHub inválida. Formato esperado: https://github.com/usuario/repositorio"
         )
     owner, repo = partes[-2], partes[-1]
-
-    # Obtener la rama por defecto del repositorio
+ 
     async with httpx.AsyncClient() as client:
         repo_info_url = f"https://api.github.com/repos/{owner}/{repo}"
-        response = await client.get(repo_info_url, headers={"Accept": "application/vnd.github+json"})
-
+        response = await client.get(repo_info_url, headers=github_headers())
+ 
+    verificar_rate_limit(response)
     if response.status_code == 404:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -131,15 +126,15 @@ async def cargar_desde_github(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Error al conectar con GitHub. Intentá de nuevo más tarde"
         )
-
+ 
     default_branch = response.json().get("default_branch", "main")
-
-    # Consultar el árbol completo del repo usando la rama por defecto
+ 
     api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1"
-
+ 
     async with httpx.AsyncClient() as client:
-        response = await client.get(api_url, headers={"Accept": "application/vnd.github+json"})
-
+        response = await client.get(api_url, headers=github_headers())
+ 
+    verificar_rate_limit(response)
     if response.status_code == 404:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -150,51 +145,54 @@ async def cargar_desde_github(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Error al conectar con GitHub. Intentá de nuevo más tarde"
         )
-
+ 
     tree = response.json().get("tree", [])
-
-    # Filtrar solo archivos .py
     archivos_py = [item for item in tree if item["type"] == "blob" and item["path"].endswith(".py")]
-
+ 
     if not archivos_py:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="El repositorio no contiene archivos .py"
         )
-
+ 
     creados = []
     for item in archivos_py:
         nombre = item["path"].replace("/", "_")
-
+ 
         nuevo = File(
             nombre=nombre,
-            ruta_almacenamiento=item['path'],  # path dentro del repo, no ruta local
-            tamaño_bytes=item.get("size", None),  # el árbol ya trae el size
+            ruta_almacenamiento=item['path'],  # path dentro del repo, usado como identificador
+            contenido=None,                    # GitHub se lee fresco en cada análisis, no se persiste aquí
+            tamaño_bytes=item.get("size", None),
             proyecto_id=proyecto_id,
             estado=True
         )
         db.add(nuevo)
         creados.append(nuevo)
-
+ 
     db.commit()
     for f in creados:
         db.refresh(f)
-
+ 
+    registrar_actividad(
+        db, current_user.id, AccionEnum.archivo_subido,
+        proyecto_id=proyecto_id,
+        detalle=f"{len(creados)} archivos cargados desde GitHub",
+        ip_origen=ip
+    )
     return {"total": len(creados), "archivos": creados}
-
 
 # ── Listar archivos activos de un proyecto ────────────────────────────────────
 
 def get_archivos(db: Session, proyecto_id: int, current_user: User) -> dict:
     _verificar_proyecto(db, proyecto_id, current_user)
-
+ 
     archivos = db.query(File).filter(
         File.proyecto_id == proyecto_id,
         File.estado == True
     ).all()
-
+ 
     return {"total": len(archivos), "archivos": archivos}
-
 
 # ── Obtener un archivo por ID ─────────────────────────────────────────────────
 
@@ -203,16 +201,15 @@ def get_archivo(db: Session, archivo_id: int, current_user: User) -> File:
         File.id == archivo_id,
         File.estado == True
     ).first()
-
+ 
     if not archivo:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Archivo no encontrado"
         )
-
+ 
     _verificar_acceso_archivo(db, archivo, current_user)
     return archivo
-
 
 # ── Reemplazar un archivo (nueva versión) ─────────────────────────────────────
 
@@ -224,21 +221,24 @@ async def update_archivo(
 ) -> File:
     archivo = get_archivo(db, archivo_id, current_user)
     _validar_extension(file.filename)
-
-    # Pisar el archivo en disco
-    ruta = _generar_ruta(current_user.id, archivo.proyecto_id, file.filename)
-    with open(ruta, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # Actualizar registro en BD
+ 
+    bytes_contenido = await file.read()
+    try:
+        texto_contenido = bytes_contenido.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"El archivo '{file.filename}' no es texto UTF-8 válido"
+        )
+ 
     archivo.nombre = file.filename
-    archivo.ruta_almacenamiento = str(ruta)
-    archivo.tamaño_bytes = os.path.getsize(ruta)
-
+    archivo.contenido = texto_contenido
+    archivo.ruta_almacenamiento = None
+    archivo.tamaño_bytes = len(bytes_contenido)
+ 
     db.commit()
     db.refresh(archivo)
     return archivo
-
 
 # ── Borrado lógico ────────────────────────────────────────────────────────────
 
