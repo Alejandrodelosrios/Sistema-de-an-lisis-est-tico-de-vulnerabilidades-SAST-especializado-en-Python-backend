@@ -9,7 +9,7 @@ from app.services.auth_service import crear_superadmin_inicial
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.drop_all(bind=engine)
+    #Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     print("✅ Tablas creadas")
 
