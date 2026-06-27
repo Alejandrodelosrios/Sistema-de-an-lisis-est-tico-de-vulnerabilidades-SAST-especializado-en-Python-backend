@@ -1,15 +1,18 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile, status
 from typing import Optional
+from app.models.activity_log import AccionEnum
 from app.models.project import Project, OrigenEnum
 from app.models.user import User
 from app.schemas.project import ProjectCreate,ProjectUpdate
+from app.services.activity_service import registrar_actividad
 import app.services.file_service as file_service
 
 async def crear_proyecto(
     db: Session,
     proyecto: ProjectCreate,
     current_user: User,
+    ip:str,
     files: Optional[list[UploadFile]] = None   # ← parámetro nuevo
 ) -> Project:
 
@@ -38,20 +41,28 @@ async def crear_proyecto(
     db.commit()
     db.refresh(nuevo_proyecto)
 
+    registrar_actividad(db,nuevo_proyecto.usuario_id,AccionEnum.proyecto_creado,
+                        proyecto_id=nuevo_proyecto.id,
+                        detalle=f"Proyecto: {nuevo_proyecto.nombre} ({nuevo_proyecto.origen.value})",
+                        ip_origen=ip
+                       )
+
     # Disparar carga de archivos internamente según origen
     if proyecto.origen == OrigenEnum.github:
         await file_service.cargar_desde_github(
             db=db,
             proyecto_id=nuevo_proyecto.id,
             current_user=current_user,
-            url_github=proyecto.url_github
+            url_github=proyecto.url_github,
+            ip=ip
         )
     else:
         await file_service.cargar_archivos(
             db=db,
             proyecto_id=nuevo_proyecto.id,
             current_user=current_user,
-            files=files
+            files=files,
+            ip=ip
         )
 
     db.refresh(nuevo_proyecto)
@@ -82,7 +93,7 @@ def get_proyecto(db:Session, proyecto_id: int,current_user: User)-> Project:
         )
     return proyecto
 
-async def update_proyecto(db: Session, proyecto_id: int, proyecto_dato: ProjectUpdate, current_user: User, files=None) -> Project:
+async def update_proyecto(db: Session, proyecto_id: int, proyecto_dato: ProjectUpdate, current_user: User,ip:str, files=None) -> Project:
     """esta funcion se encarga de actualizar un proyecto por su id"""
     proyecto = get_proyecto(db, proyecto_id, current_user)
     if proyecto_dato.nombre is not None:
@@ -105,7 +116,8 @@ async def update_proyecto(db: Session, proyecto_id: int, proyecto_dato: ProjectU
             db=db,
             proyecto_id=proyecto.id,
             current_user=current_user,
-            url_github=proyecto.url_github
+            url_github=proyecto.url_github,
+            ip=ip
         )
     
     # Si es carga_directa y vienen archivos → agregar
@@ -114,7 +126,9 @@ async def update_proyecto(db: Session, proyecto_id: int, proyecto_dato: ProjectU
             db=db,
             proyecto_id=proyecto.id,
             current_user=current_user,
-            files=files
+            files=files,
+            ip=ip
+            
         )
     # Si el proyecto es github pero vienen archivos → rechazar explícitamente
     elif proyecto.origen == OrigenEnum.github and files:
@@ -132,11 +146,21 @@ async def update_proyecto(db: Session, proyecto_id: int, proyecto_dato: ProjectU
 
     db.commit()
     db.refresh(proyecto)
+    registrar_actividad(db,proyecto.usuario_id,AccionEnum.proyecto_actualizado,
+                        proyecto_id=proyecto.id,
+                        detalle=f"Proyecto: {proyecto.nombre} ({proyecto.origen.value})",
+                        ip_origen=ip
+                        )
     return proyecto     
 
-def eliminar_proyecto(db: Session, proyecto_id: int,current_user: User)->dict:
+def eliminar_proyecto(db: Session, proyecto_id: int,current_user: User,ip:str)->dict:
     """esta funcion se encarga de eliminar un proyecto por su id"""
     proyecto=get_proyecto(db,proyecto_id,current_user)
     proyecto.estado=False
     db.commit()
+    registrar_actividad(db,proyecto.usuario_id,AccionEnum.proyecto_eliminado,
+                        proyecto_id=proyecto.id,
+                        detalle=f"Proyecto: {proyecto.nombre} ({proyecto.origen.value})",
+                        ip_origen=ip
+                        )
     return {"message": "Proyecto eliminado correctamente"}

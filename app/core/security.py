@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 import bcrypt
 from app.core.config import settings
+from app.models.user import RolEnum
 
 def hash_password(password: str)-> str:
     """esta funcion encripta la contraseña del usuario"""
@@ -16,18 +17,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         hashed_password.encode("utf-8")
     )
 
-def create_access_token(user_id: int)-> str:
+def create_access_token(user_id: int, rol:RolEnum)-> str:
     """ esta funcion crea un token de corta duracion 
     para autenticar requests"""
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
-    playload = {
+    payload = {
         "sub": str(user_id),
+        "rol": rol.value,
         "exp": expire,
         "type": "access"
     }
-    return jwt.encode(playload,settings.SECRET_KEY,algorithm=settings.ALGORITHM)
+    return jwt.encode(payload,settings.SECRET_KEY,algorithm=settings.ALGORITHM)
 
 def create_refresh_token(user_id: int) -> str:
     """esta funcion crea un token de larga duración para renovar el access token"""

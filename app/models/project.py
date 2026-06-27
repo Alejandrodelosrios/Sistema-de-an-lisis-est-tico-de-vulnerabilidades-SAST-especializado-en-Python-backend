@@ -22,3 +22,4 @@ class Project(Base):
     usuario=relationship("User",back_populates="proyectos")
     archivos=relationship("File", back_populates="proyecto")
     analisis=relationship("Analysis", back_populates="proyecto")
+    opiniones = relationship("Opinion", back_populates="proyecto")

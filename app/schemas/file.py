@@ -1,17 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
-
-class FileCreate(BaseModel):
-    nombre: str
-    ruta_almacenamiento: str
-    tamaño_bytes: int | None = None
-    proyecto_id: int
-
-
-class FileUpdate(BaseModel):
-    nombre: str | None = None
-
 class FileResponse(BaseModel):
     id: int
     nombre: str
@@ -26,3 +15,10 @@ class FileResponse(BaseModel):
 class FileListResponse(BaseModel):
     total: int
     archivos: list[FileResponse]
+
+class FileContentResponse(FileResponse):
+    """
+    Para ver el detalle de UN archivo puntual (GET /archivos/{id}/contenido),
+    por ejemplo si quieres mostrar el código fuente en el frontend.
+    """
+    contenido: str | None = None

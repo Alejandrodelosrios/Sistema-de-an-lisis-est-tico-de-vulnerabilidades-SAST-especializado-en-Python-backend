@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from app.core.request_utils import obtener_ip_cliente
 from app.database import get_db
+from app.models.activity_log import AccionEnum
 from app.models.user import User
 from app.models.project import Project
 from app.schemas.analysis import (
@@ -10,9 +12,10 @@ from app.schemas.analysis import (
     AnalysisHistoryResponse
 )
 from app.services import analysis_service
+from app.services.activity_service import registrar_actividad
 from app.services.report_service import generar_reporte_pdf
 from app.services import vulnerability_service
-from app.core.dependencies import get_current_active_user
+from app.core.dependencies import get_current_user
 
 
 router = APIRouter(prefix="/proyectos", tags=["Análisis"])
@@ -21,8 +24,9 @@ router = APIRouter(prefix="/proyectos", tags=["Análisis"])
 @router.post("/{proyecto_id}/analisis/", response_model=AnalysisDetailResponse, status_code=status.HTTP_201_CREATED)
 async def ejecutar_analisis(
     proyecto_id: int,
+    request:Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Ejecuta un análisis de seguridad en todos los archivos de un proyecto.
@@ -30,14 +34,15 @@ async def ejecutar_analisis(
     - **proyecto_id**: ID del proyecto a analizar
     - Devuelve el análisis creado con todas sus vulnerabilidades detectadas
     """
-    return await analysis_service.ejecutar_analisis(db, proyecto_id, current_user)
+    ip=obtener_ip_cliente(request)
+    return await analysis_service.ejecutar_analisis(db, proyecto_id, current_user, ip)
 
 
 @router.get("/{proyecto_id}/analisis/", response_model=AnalysisListResponse)
 def listar_analisis(
     proyecto_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Lista todos los análisis realizados en un proyecto.
@@ -53,7 +58,7 @@ def get_analisis(
     proyecto_id: int,
     analisis_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Obtiene los detalles de un análisis específico.
@@ -69,7 +74,7 @@ def get_analisis(
 def get_project_history(
     proyecto_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Obtiene el historial y evolución de seguridad de un proyecto (CU6).
@@ -84,8 +89,9 @@ def get_project_history(
 def descargar_reporte(
     proyecto_id: int,
     analisis_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Descarga el reporte PDF de un análisis específico.
@@ -102,6 +108,7 @@ def descargar_reporte(
     proyecto = db.query(Project).filter(Project.id == proyecto_id).first()
 
     pdf_buffer = generar_reporte_pdf(proyecto.nombre, analisis, vulnerabilidades)
+    registrar_actividad(db,current_user.id,AccionEnum.reporte_descargado,proyecto_id=proyecto_id,ip_origen=obtener_ip_cliente(request))
 
     return StreamingResponse(
         pdf_buffer,
